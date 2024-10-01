@@ -1,0 +1,208 @@
+{% extends "layout/default.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-9">
+            <div id="chatbox" class="bg-white border border-secondary rounded p-3 mb-3" style="height: 490px; overflow-y: scroll;"></div>
+
+            <div class="d-flex justify-content-center mb-3">
+                <input type="text" id="user_input" class="form-control me-2" placeholder="Ask a question..." autofocus>
+                <button id="send" class="btn btn-success">Send</button>
+            </div>
+        </div>
+        <div class="col-3 mt-5">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    Chat History
+                    <button class='btn btn-primary' id='new-chat'>NEW CHAT</button>
+                </div>
+
+                <div class="card-body">
+                    <ul>
+                        {% for history in chat_histories %}
+                        <li>
+                            <a href="#" class="chat-history-link" data-id="{{ history.id }}" style="text-decoration: none; text-transform: capitalize;">
+                                {{ history.title }} ({{ history.created_at }})
+                            </a>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.10.2/dist/umd/popper.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.min.js"></script>
+
+<script>
+    $(document).ready(function() {
+        let currentHistoryId = null; // Store the ID of the currently active chat history
+    
+        // Send message on click
+        $('#send').click(function() {
+            let userInput = $('#user_input').val();
+            if (userInput.trim() !== '') {
+                $('#chatbox').append('<div class="text-end mb-2"><div class="alert alert-success d-inline-block">' + userInput + '</div></div>');
+                $.ajax({
+                    url: '{% url "chat_bot:get_response" %}',
+                    type: 'POST',
+                    data: {
+                        message: userInput,
+                        csrfmiddlewaretoken: '{{ csrf_token }}'
+                    },
+                    success: function(response) {
+                        $('#chatbox').append('<div class="text-start mb-2"><div class="alert alert-secondary d-inline-block">' + response.response + '</div></div>');
+                        $('#user_input').val(''); // Clear input field
+                        $('#chatbox').scrollTop($('#chatbox')[0].scrollHeight); // Scroll to the bottom
+
+                        // Prepare data to save chat history
+                        const chatData = {
+                            'user': '{{ user.id }}',
+                            'title': userInput, // Assuming you want to title the chat as the initial input
+                            'chathistory': JSON.stringify([{"userInput": userInput, "botResponse": response.response}]),
+                            'timestamp': new Date().toISOString() // Save current local time
+                        };
+
+                        // If there's an active history, include its ID
+                        if (currentHistoryId) {
+                            chatData.id = currentHistoryId;
+                        }
+
+                        // Save chat history
+                        $.ajax({
+                            url: '{% url "chat_bot:chat_history" %}',
+                            type: 'POST',
+                            data: chatData,
+                            success: function(historyResponse) {   
+                                // If new chat history is created, set the currentHistoryId
+                                if (!currentHistoryId) {
+                                    currentHistoryId = historyResponse.id;
+                                }
+                            },
+                            error: function() {
+                                console.log('Failed to save chat history.');
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    
+        // Allow sending message with Enter key
+        $('#user_input').keypress(function(e) {
+            if (e.which === 13) {
+                $('#send').click();
+            }
+        });
+    
+        // Load chat history when clicking on a history link
+        $('.chat-history-link').click(function(e) {
+            e.preventDefault();
+            let historyId = $(this).data('id');
+            currentHistoryId = historyId;  // Set the active history ID
+            
+            // Check if chat history exists in local storage
+            let localChatHistory = localStorage.getItem('chatHistory_' + historyId);
+            
+            if (localChatHistory) {
+                // If found in local storage, parse and load it
+                console.log('Chat history loaded from local storage:', localChatHistory);
+                loadChatHistory(JSON.parse(localChatHistory));
+            } else {
+                // If not found in local storage, make the API call
+                $.ajax({
+                    url: '{% url "chat_bot:find_one" 0 %}'.replace('0', historyId),
+                    type: 'GET',
+                    success: function(history) {
+                        console.log('Chat history loaded successfully:', history);
+
+                        // Save the API response in local storage
+                        localStorage.setItem('chatHistory_' + historyId, JSON.stringify(history));
+
+                        // Load the chat history
+                        loadChatHistory(history);
+                    },
+                    error: function() {
+                        console.log('Failed to load chat history.');
+                    }
+                });
+            }
+        });
+
+        // Function to load chat history into the chatbox
+        function loadChatHistory(history) {
+            let chatData = [];
+
+            // Attempt to parse if it's a JSON string
+            if (typeof history.chathistory === 'string') {
+                try {
+                    chatData = JSON.parse(history.chathistory);
+                } catch (e) {
+                    console.error('Failed to parse chat history JSON.');
+                }
+            } else {
+                chatData = history.chathistory;
+            }
+
+            // Check if chatData is an array
+            if (Array.isArray(chatData)) {
+                $('#chatbox').empty(); // Clear the chatbox
+
+                // Assuming chatData is an array of chat entries
+                chatData.forEach(function(chat) {
+                    $('#chatbox').append('<div class="text-end mb-2"><div class="alert alert-success d-inline-block">' + chat.userInput + '</div></div>');
+                    $('#chatbox').append('<div class="text-start mb-2"><div class="alert alert-secondary d-inline-block">' + chat.botResponse + '</div></div>');
+                });
+
+                $('#chatbox').scrollTop($('#chatbox')[0].scrollHeight); // Scroll to the bottom
+            } else {
+                console.log('Chat history is not in the expected format.');
+            }
+        }
+
+        $('#new-chat').click(function() {
+            currentHistoryId = null; // Reset the current chat history ID
+            $('#chatbox').empty(); // Clear the chatbox
+            $('#user_input').val(''); // Clear the input field
+            localStorage.clear(); // Clear all local storage related to chat history
+            console.log('New chat started, local storage cleared.');
+        });
+
+        // Function to load the latest chat history from local storage
+        function loadLatestChatHistoryFromLocalStorage() {
+            const keys = Object.keys(localStorage);
+            const chatHistoryKeys = keys.filter(key => key.startsWith('chatHistory_'));
+            
+            if (chatHistoryKeys.length > 0) {
+                // Sort chat histories by timestamp
+                const sortedHistories = chatHistoryKeys.map(key => {
+                    const chatHistory = JSON.parse(localStorage.getItem(key));
+                    return {
+                        key: key,
+                        timestamp: new Date(chatHistory.timestamp),
+                        data: chatHistory
+                    };
+                }).sort((a, b) => b.timestamp - a.timestamp); // Sort descending
+
+                // Get the latest chat history
+                const latestHistory = sortedHistories[0];
+                if (latestHistory) {
+                    console.log('Loading latest chat history from local storage:', latestHistory.data);
+                    loadChatHistory(latestHistory.data);
+                    currentHistoryId = latestHistory.key.split('_')[1]; // Extract ID from key
+                }
+            }
+        }
+        
+        // Load the latest chat history on window reload
+        loadLatestChatHistoryFromLocalStorage();
+
+    });
+</script>
+
+{% endblock %}
+    
